@@ -8,7 +8,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ---------------------------------------------------------------------------
@@ -39,8 +39,7 @@ class NotionTask(BaseModel):
     created_time: Optional[str] = None
     last_edited_time: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ---------------------------------------------------------------------------
@@ -57,8 +56,7 @@ class NotionAgentLog(BaseModel):
     details: str = ""
     timestamp: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ---------------------------------------------------------------------------
@@ -68,11 +66,20 @@ class CreateTaskRequest(BaseModel):
     """Payload for creating a new task in Notion."""
 
     name: str = Field(..., min_length=1, max_length=200)
-    status: str = Field(default="To Do")
-    priority: str = Field(default="Media")
-    effort: str = Field(default="Medio")
-    type: str = Field(default="Otro")
-    agent: str = Field(default="Usuario")
+    status: str = Field(
+        default="To Do",
+        pattern=r"^(Backlog|To Do|In Progress|En Revisión|Done)$",
+    )
+    priority: str = Field(default="Media", pattern=r"^(Alta|Media|Baja)$")
+    effort: str = Field(default="Medio", pattern=r"^(Bajo|Medio|Alto)$")
+    type: str = Field(
+        default="Otro",
+        pattern=r"^(Código|Archivo|Web|Comunicación|Otro)$",
+    )
+    agent: str = Field(
+        default="Usuario",
+        pattern=r"^(Organizador|Ejecutor|Usuario)$",
+    )
     session_id: str = ""
     order: int = 0
     notes: str = ""

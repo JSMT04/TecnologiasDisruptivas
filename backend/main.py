@@ -5,6 +5,7 @@ Assembles routers, middleware, CORS, and database initialisation.
 
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import asynccontextmanager
 
@@ -15,12 +16,15 @@ from fastapi.middleware.cors import CORSMiddleware
 # Load environment variables from .env (before any config reads)
 load_dotenv()
 
-from agent.openclaw_client import OpenClawClient  # noqa: E402 — must come after load_dotenv
+import config  # noqa: E402 — must come after load_dotenv
+from agent.openclaw_client import OpenClawClient  # noqa: E402
 from agents.manager import AgentManager  # noqa: E402
 from models.database import init_db  # noqa: E402
 from notion.client import NotionClient  # noqa: E402
 from routers import auth, health, tasks  # noqa: E402
 from routers import notion_routes  # noqa: E402
+
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper())
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +33,9 @@ from routers import notion_routes  # noqa: E402
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialise resources on startup, clean up on shutdown."""
+    # Fail fast if production is misconfigured with insecure default secrets
+    config.validate_production_config()
+
     # Startup
     init_db()
 
@@ -66,9 +73,7 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-    ],
+    allow_origins=config.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

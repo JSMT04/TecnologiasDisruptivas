@@ -11,23 +11,42 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from agent.openclaw_client import OpenClawClient
+from config import MAX_TASKS_PER_SESSION
 from middleware.jwt_auth import require_auth
+from middleware.rate_limit import check_rate_limit
 from models.database import SessionModel, TaskModel, get_db
 
 logger = logging.getLogger("flowstep.tasks")
 router = APIRouter(prefix="/api/v1", tags=["tasks"])
 
 
+# Map Notion Kanban statuses (English) to the local SQLite status vocabulary.
+_NOTION_TO_LOCAL_STATUS = {
+    "Backlog": "pendiente",
+    "To Do": "pendiente",
+    "In Progress": "activa",
+    "En Revisión": "activa",
+    "Done": "completada",
+}
+
+
 # ---------------------------------------------------------------------------
 # Pydantic Schemas
 # ---------------------------------------------------------------------------
 class TriageRequest(BaseModel):
-    raw_tasks: list[str] = Field(..., min_items=1, max_items=20)
+    raw_tasks: list[str] = Field(..., min_length=1, max_length=MAX_TASKS_PER_SESSION)
+
+    @field_validator("raw_tasks")
+    @classmethod
+    def _no_empty_tasks(cls, value: list[str]) -> list[str]:
+        cleaned = [t.strip() for t in value if t and t.strip()]
+        if not cleaned:
+            raise ValueError("raw_tasks must contain at least one non-empty task")
+        return cleaned
 
 
 class TaskResponse(BaseModel):
@@ -45,8 +64,7 @@ class TaskResponse(BaseModel):
     completed_at: Optional[str] = None
     notes: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TriageResponse(BaseModel):
@@ -74,11 +92,15 @@ async def create_session_tasks(
     payload: TriageRequest,
     request: Request,
     db: Session = Depends(get_db),
-    auth: dict = Depends(require_auth),
+    auth: dict = Depends(check_rate_limit),
 ) -> dict:
     """
     Ingest raw tasks, process them through the Notion Agent Manager (Organizador),
     and persist them in both Notion and SQLite (locally) for synchronization.
+
+    SQLite is rebuilt from the authoritative Notion board for this session in a
+    single transaction, so a triage failure never leaves the local DB empty and
+    re-running triage keeps both stores in sync.
     """
     # 1. Verify session exists and belongs to this JWT token
     if auth.get("session_id") != session_id:
@@ -94,80 +116,69 @@ async def create_session_tasks(
             detail="Session not found",
         )
 
-    # Clean existing tasks for this session to allow re-running triage if needed
-    try:
-        db.query(TaskModel).filter(TaskModel.session_id == session_id).delete()
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to clear existing tasks: {exc}",
-        ) from exc
-
     # 2. Invoke Agent Manager for Triage Analysis & Notion Creation
+    #    (Notion is the source of truth — nothing is deleted locally yet.)
     manager = request.app.state.agent_manager
     try:
         result = await manager.process_new_tasks(payload.raw_tasks, session_id)
     except Exception as exc:
-        logger.error(f"Notion Agent Manager triage error: {exc}")
+        logger.error("Notion Agent Manager triage error: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="Failed to analyze and save tasks via Agent Manager",
         ) from exc
 
-    # 3. Process tasks and write to local SQLite database
-    created_tasks = result.get("tasks", [])
     tiempo_total_estimado_min = result.get("tiempo_total_estimado_min", 60)
     triage_warning = result.get("advertencia")
 
-    processed_tasks = []
-    for idx, nt in enumerate(created_tasks):
-        urgency = nt.get("priority", "Media").lower()
-        effort = nt.get("effort", "Medio").lower()
-        tipo = nt.get("type", "Otro").lower()
+    # 3. Re-read the full board for this session from Notion so SQLite mirrors it
+    try:
+        board_tasks = await manager.notion_client.query_tasks(session_id=session_id)
+    except Exception as exc:
+        logger.error("Failed to read Notion board after triage: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Failed to read tasks from Notion after triage",
+        ) from exc
 
-        new_task = TaskModel(
-            id=nt.get("page_id") or str(uuid.uuid4()),
-            session_id=session_id,
-            raw_input=payload.raw_tasks[idx] if idx < len(payload.raw_tasks) else nt.get("name", ""),
-            title=nt.get("name", "Tarea sin título"),
-            urgency=urgency,
-            effort=effort,
-            type=tipo,
-            order_index=nt.get("order") or (idx + 1),
-            status="pendiente",
-            expected_path=None,
-            started_at=None,
-            completed_at=None,
-            notes=nt.get("notes"),
+    # 4. Rebuild SQLite atomically: delete + insert in a single transaction so a
+    #    failure rolls back cleanly without losing the previous task set.
+    processed_tasks: list[TaskModel] = []
+    try:
+        db.query(TaskModel).filter(TaskModel.session_id == session_id).delete()
+
+        for idx, nt in enumerate(board_tasks):
+            local_status = _NOTION_TO_LOCAL_STATUS.get(nt.status, "pendiente")
+            new_task = TaskModel(
+                id=nt.page_id or str(uuid.uuid4()),
+                session_id=session_id,
+                raw_input=nt.name or "Tarea sin título",
+                title=nt.name or "Tarea sin título",
+                urgency=(nt.priority or "Media").lower(),
+                effort=(nt.effort or "Medio").lower(),
+                type=(nt.type or "Otro").lower(),
+                order_index=nt.order or (idx + 1),
+                status=local_status,
+                expected_path=_infer_expected_path(nt.name or ""),
+                started_at=None,
+                completed_at=nt.last_edited_time if local_status == "completada" else None,
+                notes=nt.notes,
+            )
+            db.add(new_task)
+            processed_tasks.append(new_task)
+
+        db_session.total_tasks = len(processed_tasks)
+        db_session.completed = sum(
+            1 for t in processed_tasks if t.status == "completada"
         )
 
-        # Infer expected path for local workspace verification features
-        text_lower = new_task.title.lower()
-        if any(ext in text_lower for ext in [".py", ".js", ".html", ".css", "code", "código"]):
-            new_task.expected_path = "src/app.py" if ".py" in text_lower else "src/index.js"
-            if ".html" in text_lower:
-                new_task.expected_path = "index.html"
-            elif ".css" in text_lower:
-                new_task.expected_path = "src/index.css"
-        elif any(kwd in text_lower for kwd in ["crear archivo", "escribir archivo", "documento", "archivo", "txt", "readme", "markdown"]):
-            new_task.expected_path = "README.md" if "readme" in text_lower else "documento.txt"
-
-        db.add(new_task)
-        processed_tasks.append(new_task)
-
-    # 4. Update session model stats
-    db_session.total_tasks = len(processed_tasks)
-    db_session.completed = 0
-
-    try:
         db.commit()
     except Exception as exc:
         db.rollback()
+        logger.error("Failed to persist tasks: %s", exc)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to persist tasks: {exc}",
+            detail="Failed to persist tasks",
         ) from exc
 
     return {
@@ -175,6 +186,20 @@ async def create_session_tasks(
         "tiempo_total_estimado_min": tiempo_total_estimado_min,
         "advertencia": triage_warning,
     }
+
+
+def _infer_expected_path(title: str) -> Optional[str]:
+    """Best-effort guess of a workspace file path from a task title."""
+    text_lower = title.lower()
+    if any(ext in text_lower for ext in [".py", ".js", ".html", ".css", "code", "código"]):
+        if ".html" in text_lower:
+            return "index.html"
+        if ".css" in text_lower:
+            return "src/index.css"
+        return "src/app.py" if ".py" in text_lower else "src/index.js"
+    if any(kwd in text_lower for kwd in ["crear archivo", "escribir archivo", "documento", "archivo", "txt", "readme", "markdown"]):
+        return "README.md" if "readme" in text_lower else "documento.txt"
+    return None
 
 
 @router.put("/task/{task_id}/status", response_model=TaskResponse)
@@ -230,9 +255,10 @@ async def update_task_status(
         db.commit()
     except Exception as exc:
         db.rollback()
+        logger.error("Failed to update task status: %s", exc)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to update task status: {exc}",
+            detail="Failed to update task status",
         ) from exc
 
     return task
@@ -285,9 +311,10 @@ async def reorder_session_task(
         db.commit()
     except Exception as exc:
         db.rollback()
+        logger.error("Failed to save reordered tasks: %s", exc)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to save reordered tasks: {exc}",
+            detail="Failed to save reordered tasks",
         ) from exc
 
     return tasks_list

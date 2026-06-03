@@ -5,33 +5,37 @@ Handles session creation and JWT token issuance.
 
 from __future__ import annotations
 
-import os
+import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from config import JWT_ALGORITHM, JWT_SECRET, SESSION_TIMEOUT_MINUTES
+from middleware.rate_limit import check_session_creation_rate_limit
 from models.database import SessionModel, get_db
+
+logger = logging.getLogger("flowstep.auth")
 
 router = APIRouter(prefix="/api/v1", tags=["auth"])
 
-# ---------------------------------------------------------------------------
-# Configuration from environment
-# ---------------------------------------------------------------------------
-JWT_SECRET: str = os.getenv("JWT_SECRET", "change-me-in-production")
-SESSION_TIMEOUT_MINUTES: int = int(os.getenv("SESSION_TIMEOUT_MINUTES", "480"))
-
 
 @router.post("/auth/session")
-async def create_session(db: Session = Depends(get_db)) -> dict:
+async def create_session(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
     """
     Create a new work session.
 
     Returns a signed JWT containing the session_id and its expiration.
     Also persists the session record in SQLite.
     """
+    # Throttle anonymous session creation per client IP to prevent JWT farming
+    check_session_creation_rate_limit(request)
+
     # Generate identifiers & timestamps
     session_id = str(uuid.uuid4())
     now = datetime.now(tz=timezone.utc)
@@ -44,11 +48,12 @@ async def create_session(db: Session = Depends(get_db)) -> dict:
     }
 
     try:
-        token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+        token = jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
     except Exception as exc:
+        logger.error("Failed to generate token: %s", exc)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to generate token: {exc}",
+            detail="Failed to generate authentication token",
         ) from exc
 
     # Persist session in database
@@ -67,9 +72,10 @@ async def create_session(db: Session = Depends(get_db)) -> dict:
         db.commit()
     except Exception as exc:
         db.rollback()
+        logger.error("Failed to persist session: %s", exc)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to persist session: {exc}",
+            detail="Failed to persist session",
         ) from exc
 
     return {

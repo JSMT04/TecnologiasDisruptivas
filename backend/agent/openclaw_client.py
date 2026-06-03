@@ -5,22 +5,49 @@ Robust client supporting httpx calls to OpenClaw Gateway and an intelligent mock
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 import logging
 import httpx
 from datetime import datetime, timezone
 
+from config import (
+    ALLOW_MOCK_FALLBACK,
+    OPENCLAW_GATEWAY_TOKEN,
+    OPENCLAW_GATEWAY_URL,
+)
+
 logger = logging.getLogger("flowstep.openclaw")
+
+
+def _strip_markdown_fences(content: str) -> str:
+    """Remove ```json ... ``` markdown fences that LLMs often wrap JSON in.
+
+    Uses prefix/suffix removal rather than ``str.strip`` character sets (the old
+    ``lstrip("```json")`` removed any leading j/s/o/n/backtick characters, which
+    could corrupt valid JSON).
+    """
+    text = content.strip()
+    if text.startswith("```"):
+        # Drop the opening fence line (``` or ```json)
+        newline = text.find("\n")
+        if newline != -1:
+            text = text[newline + 1:]
+        else:
+            text = text[3:]
+    if text.endswith("```"):
+        text = text[: -3]
+    return text.strip()
 
 
 class OpenClawClient:
     """Client for communicating with the OpenClaw Gateway."""
 
-    def __init__(self, gateway_url: str = "http://openclaw:18789"):
-        self.gateway_url = gateway_url
+    def __init__(self, gateway_url: str | None = None):
+        self.gateway_url = gateway_url or OPENCLAW_GATEWAY_URL
         self.api_key = os.getenv("ANTHROPIC_API_KEY", "")
-        self.gateway_token = os.getenv("OPENCLAW_GATEWAY_TOKEN", "flowstep-secret-token-123")
+        self.gateway_token = OPENCLAW_GATEWAY_TOKEN
         # Automatic mock mode enabled if the API key is missing, empty, or the default pending placeholder
         self.is_mock_mode = (
             not self.api_key
@@ -108,19 +135,35 @@ class OpenClawClient:
                 )
                 if response.status_code != 200:
                     logger.error(f"OpenClaw returned error status: {response.status_code} - {response.text}")
-                    # Fallback to mock if API returns error so user has robust UX
-                    return self._generate_mock_triage(tasks, warning="Nota: Respuesta simulada por fallo del Gateway AI.")
+                    return self._fallback_or_raise(
+                        tasks,
+                        reason=f"Gateway respondió {response.status_code}",
+                        warning="Nota: Respuesta simulada por fallo del Gateway AI.",
+                    )
 
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
-                # Parse content as JSON
-                import json
-                # Clean up potential markdown wrappers
-                content_clean = content.strip().lstrip("```json").rstrip("```").strip()
+                content_clean = _strip_markdown_fences(content)
                 return json.loads(content_clean)
         except Exception as exc:
             logger.error(f"Exception during OpenClaw API call: {exc}")
-            return self._generate_mock_triage(tasks, warning="Nota: Respuesta simulada por desconexión del Gateway AI.")
+            return self._fallback_or_raise(
+                tasks,
+                reason=str(exc),
+                warning="Nota: Respuesta simulada por desconexión del Gateway AI.",
+            )
+
+    def _fallback_or_raise(self, tasks: list[str], reason: str, warning: str) -> dict:
+        """Return a mock triage if fallback is allowed, otherwise raise.
+
+        In production (``ALLOW_MOCK_FALLBACK`` disabled) we must NOT silently
+        pretend the AI ran — that would mislead the user. Instead we surface the
+        failure so the caller can return a proper error.
+        """
+        if ALLOW_MOCK_FALLBACK:
+            logger.warning("Cayendo a triaje mock por: %s", reason)
+            return self._generate_mock_triage(tasks, warning=warning)
+        raise RuntimeError(f"OpenClaw Gateway no disponible: {reason}")
 
     def _generate_mock_triage(self, tasks: list[str], warning: str | None = None) -> dict:
         """Intelligently mock the LLM triage based on text analysis."""

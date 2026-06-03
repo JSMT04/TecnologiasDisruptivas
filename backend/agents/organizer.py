@@ -6,9 +6,7 @@ the structured tasks into the Notion Kanban board.
 
 from __future__ import annotations
 
-import json
 import logging
-import uuid
 
 from agent.openclaw_client import OpenClawClient
 from agents.base_agent import BaseAgent
@@ -79,16 +77,23 @@ class OrganizerAgent(BaseAgent):
                 logger.info("Tarea duplicada omitida: '%s'", name)
                 continue
 
+            # The real LLM emits Spanish keys (urgencia/esfuerzo) while the mock
+            # emits English keys (urgency/effort) — accept both.
+            urgency_value = item.get("urgencia", item.get("urgency", "media"))
+            effort_value = item.get("esfuerzo", item.get("effort", "medio"))
+            type_value = item.get("tipo", item.get("type", "otro"))
+            order_value = item.get("order_index", item.get("order")) or (start_order + idx)
+
             task_req = CreateTaskRequest(
                 name=name,
                 status="To Do",
-                priority=self._map_priority(item.get("urgency", "media")),
-                effort=self._map_effort(item.get("effort", "medio")),
-                type=self._map_type(item.get("tipo", "otro")),
+                priority=self._map_priority(urgency_value),
+                effort=self._map_effort(effort_value),
+                type=self._map_type(type_value),
                 agent="Organizador",
                 session_id=session_id,
-                order=start_order + idx,
-                notes=item.get("instrucciones", ""),
+                order=order_value,
+                notes=item.get("instrucciones", item.get("notes", "")),
             )
 
             try:

@@ -48,6 +48,30 @@ def get_agent_manager(request: Request) -> AgentManager:
     return manager
 
 
+async def _verify_task_ownership(
+    notion: NotionClient, task_page_id: str, session_id: str
+) -> None:
+    """Ensure the Notion task belongs to the authenticated session.
+
+    Prevents IDOR: a user must not execute/modify tasks from another session.
+    Raises 404 if the task does not exist and 403 if it belongs elsewhere.
+    """
+    try:
+        task = await notion.get_task(task_page_id)
+    except Exception as exc:
+        logger.warning("Tarea no encontrada %s: %s", task_page_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Tarea no encontrada.",
+        ) from exc
+
+    if task.session_id and task.session_id != session_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="La tarea pertenece a otra sesión.",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Request/Response schemas for routes
 # ---------------------------------------------------------------------------
@@ -76,7 +100,7 @@ async def notion_health(
         logger.error("Error en health check de Notion: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"Error al verificar la conexión con Notion: {exc}",
+            detail="Error al verificar la conexión con Notion.",
         ) from exc
 
 
@@ -112,7 +136,7 @@ async def notion_setup(
         logger.error("Error en setup de Notion: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error al crear las bases de datos: {exc}",
+            detail="Error al crear las bases de datos en Notion.",
         ) from exc
 
 
@@ -121,14 +145,18 @@ async def notion_setup(
 # ---------------------------------------------------------------------------
 @router.get("/tasks")
 async def list_tasks(
-    session_id: Optional[str] = Query(None, description="Filtrar por ID de sesión"),
     task_status: Optional[str] = Query(
         None, alias="status", description="Filtrar por estado"
     ),
     notion: NotionClient = Depends(get_notion_client),
     auth: dict = Depends(require_auth),
 ) -> dict:
-    """Consultar tareas desde la base de datos de Notion."""
+    """Consultar tareas desde la base de datos de Notion.
+
+    El ``session_id`` se toma siempre del token autenticado para evitar que un
+    usuario consulte tareas de otra sesión (IDOR).
+    """
+    session_id = auth["session_id"]
     try:
         tasks = await notion.query_tasks(
             session_id=session_id, status=task_status
@@ -141,7 +169,7 @@ async def list_tasks(
         logger.error("Error al consultar tareas: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error al consultar tareas en Notion: {exc}",
+            detail="Error al consultar tareas en Notion.",
         ) from exc
 
 
@@ -162,7 +190,7 @@ async def agent_log(
         logger.error("Error al consultar log de agentes: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error al obtener el log de actividad: {exc}",
+            detail="Error al obtener el log de actividad.",
         ) from exc
 
 
@@ -181,7 +209,7 @@ async def agents_status(
         logger.error("Error al obtener estado de agentes: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error al obtener estado de los agentes: {exc}",
+            detail="Error al obtener estado de los agentes.",
         ) from exc
 
 
@@ -191,10 +219,12 @@ async def agents_status(
 @router.post("/tasks/{task_page_id}/execute")
 async def execute_task(
     task_page_id: str,
+    notion: NotionClient = Depends(get_notion_client),
     manager: AgentManager = Depends(get_agent_manager),
     auth: dict = Depends(require_auth),
 ) -> dict:
     """Ejecutar una tarea — generar propuesta de resolución vía el agente Ejecutor."""
+    await _verify_task_ownership(notion, task_page_id, auth["session_id"])
     try:
         result = await manager.execute_task(task_page_id)
         if "error" in result:
@@ -209,7 +239,7 @@ async def execute_task(
         logger.error("Error al ejecutar tarea %s: %s", task_page_id, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error al ejecutar la tarea: {exc}",
+            detail="Error al ejecutar la tarea.",
         ) from exc
 
 
@@ -217,10 +247,12 @@ async def execute_task(
 async def complete_task(
     task_page_id: str,
     body: Optional[NotesBody] = None,
+    notion: NotionClient = Depends(get_notion_client),
     manager: AgentManager = Depends(get_agent_manager),
     auth: dict = Depends(require_auth),
 ) -> dict:
     """Marcar una tarea como completada (Done)."""
+    await _verify_task_ownership(notion, task_page_id, auth["session_id"])
     notes = body.notes if body else ""
     try:
         result = await manager.complete_task(task_page_id, notes)
@@ -236,7 +268,7 @@ async def complete_task(
         logger.error("Error al completar tarea %s: %s", task_page_id, exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error al completar la tarea: {exc}",
+            detail="Error al completar la tarea.",
         ) from exc
 
 
@@ -244,10 +276,12 @@ async def complete_task(
 async def review_task(
     task_page_id: str,
     body: Optional[NotesBody] = None,
+    notion: NotionClient = Depends(get_notion_client),
     manager: AgentManager = Depends(get_agent_manager),
     auth: dict = Depends(require_auth),
 ) -> dict:
     """Solicitar revisión para una tarea (En Revisión)."""
+    await _verify_task_ownership(notion, task_page_id, auth["session_id"])
     notes = body.notes if body else ""
     try:
         result = await manager.request_review(task_page_id, notes)
@@ -265,7 +299,7 @@ async def review_task(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error al solicitar revisión: {exc}",
+            detail="Error al solicitar revisión.",
         ) from exc
 
 
@@ -277,6 +311,7 @@ async def move_task(
     auth: dict = Depends(require_auth),
 ) -> dict:
     """Mover una tarea a un nuevo estado (columna del Kanban)."""
+    await _verify_task_ownership(notion, task_page_id, auth["session_id"])
     try:
         updated = await notion.move_task_status(task_page_id, body.status)
         return {"task": updated.model_dump(), "status": body.status}
@@ -289,5 +324,5 @@ async def move_task(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error al mover la tarea: {exc}",
+            detail="Error al mover la tarea.",
         ) from exc

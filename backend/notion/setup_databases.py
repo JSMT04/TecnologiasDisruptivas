@@ -235,7 +235,8 @@ if __name__ == "__main__":
     load_dotenv()
 
     notion_token = os.getenv("NOTION_API_TOKEN", "")
-    parent_id = os.getenv("NOTION_PARENT_PAGE_ID", "")
+    # NOTION_ROOT_PAGE_ID is the documented name; keep the legacy name as fallback.
+    parent_id = os.getenv("NOTION_ROOT_PAGE_ID", "") or os.getenv("NOTION_PARENT_PAGE_ID", "")
 
     if not notion_token or "PENDIENTE" in notion_token:
         print(
@@ -246,7 +247,7 @@ if __name__ == "__main__":
 
     if not parent_id:
         print(
-            "❌  NOTION_PARENT_PAGE_ID no configurado.\n"
+            "❌  NOTION_ROOT_PAGE_ID no configurado.\n"
             "   Indica el ID de la página padre donde se crearán las bases de datos."
         )
         sys.exit(1)

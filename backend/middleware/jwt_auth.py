@@ -5,17 +5,16 @@ FastAPI dependency that validates Bearer tokens on protected routes.
 
 from __future__ import annotations
 
-import os
+import logging
 
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-JWT_SECRET: str = os.getenv("JWT_SECRET", "change-me-in-production")
-ALGORITHM = "HS256"
+from config import JWT_ALGORITHM as ALGORITHM
+from config import JWT_SECRET
+
+logger = logging.getLogger("flowstep.auth")
 
 # FastAPI security scheme — extracts "Bearer <token>" from Authorization header
 _bearer_scheme = HTTPBearer()
@@ -48,9 +47,10 @@ async def require_auth(
             headers={"WWW-Authenticate": "Bearer"},
         )
     except jwt.InvalidTokenError as exc:
+        logger.warning("Rejected invalid JWT: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {exc}",
+            detail="Invalid authentication token",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
