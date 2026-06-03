@@ -306,6 +306,17 @@ class NotionClient:
                 headers=self._headers,
                 json=payload,
             )
+            # Self-healing fallback: if the "Task" relation doesn't exist, retry without it
+            if resp.status_code == 400 and "Task" in resp.text and ("property" in resp.text or "validation" in resp.text):
+                logger.warning("Propiedad 'Task' no encontrada en la base de datos de logs de Notion. Reintentando sin la relación.")
+                properties.pop("Task", None)
+                payload["properties"] = properties
+                resp = await client.post(
+                    f"{_NOTION_BASE_URL}/pages",
+                    headers=self._headers,
+                    json=payload,
+                )
+
             if resp.status_code not in (200, 201):
                 logger.error(
                     "Error al registrar acción del agente: %s — %s",

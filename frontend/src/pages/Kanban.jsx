@@ -37,7 +37,7 @@ const AGENT_DISPLAY = {
 };
 
 /* ── Task Card Component ── */
-function TaskCard({ task, onMove, onExecute, onComplete, onVerify, verificationResult, index }) {
+function TaskCard({ task, onMove, onExecute, onComplete, onVerify, verificationResult, index, isLoading }) {
   const priorityClass = PRIORITY_STYLES[task.priority] || PRIORITY_STYLES.Media;
   const typeEmoji = TYPE_EMOJI[task.type] || '📌';
   const agentLabel = AGENT_DISPLAY[task.agent] || `👤 ${task.agent || 'Sin asignar'}`;
@@ -98,10 +98,11 @@ function TaskCard({ task, onMove, onExecute, onComplete, onVerify, verificationR
             </span>
             <button
               onClick={() => onVerify(task.page_id)}
-              className="px-1.5 py-0.5 rounded bg-primary/20 hover:bg-primary/30 text-primary text-[10px] font-semibold transition-all shrink-0"
+              disabled={isLoading}
+              className="px-1.5 py-0.5 rounded bg-primary/20 hover:bg-primary/30 text-primary text-[10px] font-semibold transition-all shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
               title="Verificar archivo en sistema local"
             >
-              🔍 Verificar
+              {isLoading ? '⏳...' : '🔍 Verificar'}
             </button>
           </div>
           {verificationResult && (
@@ -170,7 +171,7 @@ function TaskCard({ task, onMove, onExecute, onComplete, onVerify, verificationR
 }
 
 /* ── Main Kanban Board ── */
-export default function Kanban({ token, sessionId, onBack }) {
+export default function Kanban({ token, sessionId, onBack, onSessionExpired }) {
   const [tasks, setTasks] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -187,6 +188,10 @@ export default function Kanban({ token, sessionId, onBack }) {
       const res = await fetch(`${API_BASE}/api/v1/notion/tasks?session_id=${sessionId}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
+      if (res.status === 401) {
+        if (onSessionExpired) onSessionExpired();
+        throw new Error('Tu sesión ha expirado. Por favor, inicia una nueva sesión.');
+      }
       if (!res.ok) throw new Error(`Error ${res.status}`);
       const data = await res.json();
       setTasks(Array.isArray(data) ? data : data.tasks || []);
@@ -220,8 +225,15 @@ export default function Kanban({ token, sessionId, onBack }) {
         ...prev,
         [pageId]: data
       }));
-      // Refresh task list so status & canComplete re-evaluate immediately
-      await fetchTasks(true);
+      // Update local task representation immediately for instant UI reaction
+      setTasks(prevTasks => prevTasks.map(t => {
+        if (t.page_id === pageId) {
+          return { ...t, verificado: data.verificado };
+        }
+        return t;
+      }));
+      // Refresh task list in the background
+      fetchTasks(true);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -232,6 +244,14 @@ export default function Kanban({ token, sessionId, onBack }) {
   /* ── Move task ── */
   const handleMove = useCallback(async (pageId, newStatus) => {
     setActionLoading(pageId);
+    // Optimistic update in frontend to make it feel extremely fast and snappy!
+    setTasks(prevTasks => prevTasks.map(t => {
+      if (t.page_id === pageId) {
+        return { ...t, status: newStatus };
+      }
+      return t;
+    }));
+
     try {
       const res = await fetch(`${API_BASE}/api/v1/notion/tasks/${pageId}/move`, {
         method: 'POST',
@@ -241,8 +261,21 @@ export default function Kanban({ token, sessionId, onBack }) {
         },
         body: JSON.stringify({ status: newStatus }),
       });
-      if (!res.ok) throw new Error('Error al mover tarea');
-      await fetchTasks(true);
+      if (!res.ok) {
+        // Rollback on error
+        await fetchTasks(true);
+        throw new Error('Error al mover tarea');
+      }
+      const data = await res.json();
+      if (data.task) {
+        setTasks(prevTasks => prevTasks.map(t => {
+          if (t.page_id === pageId) {
+            return { ...t, ...data.task };
+          }
+          return t;
+        }));
+      }
+      fetchTasks(true);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -259,7 +292,16 @@ export default function Kanban({ token, sessionId, onBack }) {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error('Error al ejecutar tarea');
-      await fetchTasks(true);
+      const data = await res.json();
+      if (data.task) {
+        setTasks(prevTasks => prevTasks.map(t => {
+          if (t.page_id === pageId) {
+            return { ...t, ...data.task };
+          }
+          return t;
+        }));
+      }
+      fetchTasks(true);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -270,13 +312,34 @@ export default function Kanban({ token, sessionId, onBack }) {
   /* ── Complete task ── */
   const handleComplete = useCallback(async (pageId) => {
     setActionLoading(pageId);
+    // Optimistic update
+    setTasks(prevTasks => prevTasks.map(t => {
+      if (t.page_id === pageId) {
+        return { ...t, status: 'Done' };
+      }
+      return t;
+    }));
+
     try {
       const res = await fetch(`${API_BASE}/api/v1/notion/tasks/${pageId}/complete`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error('Error al completar tarea');
-      await fetchTasks(true);
+      if (!res.ok) {
+        // Rollback
+        await fetchTasks(true);
+        throw new Error('Error al completar tarea');
+      }
+      const data = await res.json();
+      if (data.task) {
+        setTasks(prevTasks => prevTasks.map(t => {
+          if (t.page_id === pageId) {
+            return { ...t, ...data.task };
+          }
+          return t;
+        }));
+      }
+      fetchTasks(true);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -416,6 +479,7 @@ export default function Kanban({ token, sessionId, onBack }) {
                     onComplete={handleComplete}
                     onVerify={handleVerify}
                     verificationResult={verificationResults[task.page_id]}
+                    isLoading={actionLoading === task.page_id}
                   />
                 ))}
 

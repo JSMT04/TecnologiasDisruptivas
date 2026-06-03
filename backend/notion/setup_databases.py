@@ -133,7 +133,7 @@ async def create_tasks_database(token: str, parent_page_id: str) -> str:
 # ---------------------------------------------------------------------------
 # Agent Log database
 # ---------------------------------------------------------------------------
-async def create_agent_log_database(token: str, parent_page_id: str) -> str:
+async def create_agent_log_database(token: str, parent_page_id: str, tasks_db_id: Optional[str] = None) -> str:
     """Create the *Agent Log* database in Notion.
 
     Parameters
@@ -142,6 +142,8 @@ async def create_agent_log_database(token: str, parent_page_id: str) -> str:
         Notion integration bearer token.
     parent_page_id:
         The Notion page that will contain the new database.
+    tasks_db_id:
+        Optional database ID of the Tasks database to link to.
 
     Returns
     -------
@@ -176,16 +178,11 @@ async def create_agent_log_database(token: str, parent_page_id: str) -> str:
             },
             "Details": {"rich_text": {}},
             "Timestamp": {"rich_text": {}},
-            "Task": {"relation": {"database_id": "placeholder"}},
         },
     }
 
-    # NOTE: The Task relation property requires a valid database_id to point
-    # to.  When running setup, we create the Tasks DB first and then replace
-    # the placeholder.  If the Tasks DB id is not yet known we omit the
-    # relation property and add it later manually.
-    # For a first-time standalone run we simply skip the relation.
-    payload["properties"].pop("Task", None)
+    if tasks_db_id:
+        payload["properties"]["Task"] = {"relation": {"database_id": tasks_db_id}}
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(
@@ -218,7 +215,7 @@ async def run_setup(token: str, parent_page_id: str) -> dict:
     logger.info("Iniciando setup de bases de datos en Notion…")
 
     tasks_db_id = await create_tasks_database(token, parent_page_id)
-    log_db_id = await create_agent_log_database(token, parent_page_id)
+    log_db_id = await create_agent_log_database(token, parent_page_id, tasks_db_id)
 
     logger.info(
         "Setup completado — Tasks DB: %s | Log DB: %s",

@@ -145,14 +145,20 @@ async def create_session_tasks(
 
         # Infer expected path for local workspace verification features
         text_lower = new_task.title.lower()
-        if any(ext in text_lower for ext in [".py", ".js", ".html", ".css", "code", "código"]):
-            new_task.expected_path = "src/app.py" if ".py" in text_lower else "src/index.js"
-            if ".html" in text_lower:
-                new_task.expected_path = "index.html"
-            elif ".css" in text_lower:
-                new_task.expected_path = "src/index.css"
-        elif any(kwd in text_lower for kwd in ["crear archivo", "escribir archivo", "documento", "archivo", "txt", "readme", "markdown"]):
-            new_task.expected_path = "README.md" if "readme" in text_lower else "documento.txt"
+        import re
+        # Look for explicit path format (e.g. data/base.py, documento.txt, etc.)
+        path_match = re.search(r'(?:data/|src/)?[\w\-./]+\.[a-zA-Z0-9]+', new_task.title)
+        if path_match:
+            new_task.expected_path = path_match.group(0)
+        else:
+            if any(ext in text_lower for ext in [".py", ".js", ".html", ".css", "code", "código"]):
+                new_task.expected_path = "src/app.py" if ".py" in text_lower else "src/index.js"
+                if ".html" in text_lower:
+                    new_task.expected_path = "index.html"
+                elif ".css" in text_lower:
+                    new_task.expected_path = "src/index.css"
+            elif any(kwd in text_lower for kwd in ["crear archivo", "escribir archivo", "documento", "archivo", "txt", "readme", "markdown"]):
+                new_task.expected_path = "README.md" if "readme" in text_lower else "documento.txt"
 
         db.add(new_task)
         processed_tasks.append(new_task)

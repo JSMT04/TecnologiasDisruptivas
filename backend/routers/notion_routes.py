@@ -11,7 +11,7 @@ import os
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status, BackgroundTasks
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -374,9 +374,36 @@ class VerifyResponse(BaseModel):
     timestamp: str
 
 
+async def update_notion_task_notes_async(
+    notion_client: NotionClient,
+    task_page_id: str,
+    existing_notes: Optional[str],
+    expected_path: str,
+    syntax_detail: str,
+):
+    try:
+        time_str = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        verification_label = (
+            f"\n\n[MCP] Verificación de archivo local exitosa ({time_str})\n"
+            f"- Archivo: {expected_path}\n"
+            f"- Detalle: {syntax_detail}"
+        )
+        updated_notes = (
+            f"{existing_notes}{verification_label}"
+            if existing_notes
+            else verification_label
+        )
+        await notion_client.update_task(
+            task_page_id, UpdateTaskRequest(notes=updated_notes)
+        )
+    except Exception as e:
+        logger.error("Error al actualizar notas de Notion en background: %s", e)
+
+
 @router.post("/tasks/{task_page_id}/verify", response_model=VerifyResponse)
 async def verify_task_file(
     task_page_id: str,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     notion: NotionClient = Depends(get_notion_client),
     auth: dict = Depends(require_auth),
@@ -500,19 +527,15 @@ async def verify_task_file(
     # Everything is fine!
     log_audit("READ", "OK", f"Verificación exitosa: {syntax_detail}")
 
-    # Log in Notion
-    try:
-        existing_notes = task.notes or ""
-        time_str = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-        verification_label = f"\n\n[MCP] Verificación de archivo local exitosa ({time_str})\n- Archivo: {expected_path}\n- Detalle: {syntax_detail}"
-        updated_notes = (
-            f"{existing_notes}{verification_label}"
-            if existing_notes
-            else verification_label
-        )
-        await notion.update_task(task_page_id, UpdateTaskRequest(notes=updated_notes))
-    except Exception as e:
-        logger.error("Error al actualizar notas de Notion: %s", e)
+    # Log in Notion in the background to avoid blocking the response
+    background_tasks.add_task(
+        update_notion_task_notes_async,
+        notion,
+        task_page_id,
+        task.notes or "",
+        expected_path,
+        syntax_detail,
+    )
 
     return {
         "verificado": True,

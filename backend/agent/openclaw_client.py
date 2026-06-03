@@ -20,7 +20,7 @@ class OpenClawClient:
 
     def __init__(self, gateway_url: str = "http://openclaw:18789"):
         self.gateway_url = gateway_url
-        self.api_key = os.getenv("ANTHROPIC_API_KEY", "")
+        self.api_key = os.getenv("GEMINI_API_KEY", "") or os.getenv("ANTHROPIC_API_KEY", "")
         self.gateway_token = os.getenv("OPENCLAW_GATEWAY_TOKEN", "flowstep-secret-token-123")
         # Automatic mock mode enabled if the API key is missing, empty, or the default pending placeholder
         self.is_mock_mode = (
@@ -30,7 +30,7 @@ class OpenClawClient:
         )
 
         if self.is_mock_mode:
-            logger.info("OpenClawClient running in AUTOMATIC MOCK MODE (no valid Anthropic API key detected).")
+            logger.info("OpenClawClient running in AUTOMATIC MOCK MODE (no valid API key detected).")
 
     async def health_check(self) -> dict:
         """Check if OpenClaw Gateway is reachable."""

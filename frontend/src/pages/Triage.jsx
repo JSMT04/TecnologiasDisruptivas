@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-export default function Triage({ session_id, token, onTriageComplete, onBackToLanding }) {
+export default function Triage({ session_id, token, onTriageComplete, onBackToLanding, onSessionExpired }) {
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -38,6 +38,11 @@ export default function Triage({ session_id, token, onTriageComplete, onBackToLa
         },
         body: JSON.stringify({ raw_tasks: parsedTasks }),
       });
+
+      if (response.status === 401) {
+        if (onSessionExpired) onSessionExpired();
+        throw new Error('Tu sesión ha expirado. Por favor, inicia una nueva sesión.');
+      }
 
       if (!response.ok) {
         const errorData = await response.json();

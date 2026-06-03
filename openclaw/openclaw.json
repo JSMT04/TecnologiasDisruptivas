@@ -14,8 +14,8 @@
   },
   "models": {
     "providers": {
-      "anthropic": {
-        "apiKey": "${default:ANTHROPIC_API_KEY}"
+      "google": {
+        "apiKey": "${default:GEMINI_API_KEY}"
       }
     }
   },
@@ -23,7 +23,7 @@
     "list": [
       {
         "id": "default",
-        "model": "claude-opus-4-5-20251101",
+        "model": "google/gemini-2.5-flash",
         "systemPromptOverride": "Eres FlowStep AI, un agente de productividad personal. Tu rol es: 1. Analizar tareas del usuario y crear un plan diario priorizado. 2. Guiar al usuario paso a paso, tarea por tarea. 3. Usar herramientas MCP para verificar progreso real en el filesystem. 4. Generar reportes concisos al finalizar. Reglas estrictas: Responde SIEMPRE en español. Nunca inventes paths. Sé conciso, máximo 150 palabras por respuesta."
       }
     ]

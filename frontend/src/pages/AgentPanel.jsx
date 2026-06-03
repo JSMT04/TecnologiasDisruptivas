@@ -114,7 +114,7 @@ function LogEntry({ entry }) {
 }
 
 /* ── Main Agent Panel ── */
-export default function AgentPanel({ token, sessionId }) {
+export default function AgentPanel({ token, sessionId, onSessionExpired }) {
   const [healthOk, setHealthOk] = useState(null);
   const [agents, setAgents] = useState({
     organizador: { status: 'Idle', lastAction: null, lastActionTime: null, totalActions: 0 },
@@ -150,6 +150,11 @@ export default function AgentPanel({ token, sessionId }) {
           headers: { Authorization: `Bearer ${token}` },
         }),
       ]);
+
+      if (logRes.status === 401 || statusRes.status === 401) {
+        if (onSessionExpired) onSessionExpired();
+        return;
+      }
 
       // Parse log entries
       let entries = [];

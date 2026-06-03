@@ -151,6 +151,7 @@ export default function App() {
             token={token}
             onTriageComplete={handleTriageComplete}
             onBackToLanding={() => setCurrentPage('landing')}
+            onSessionExpired={handleFullReset}
           />
         );
 
@@ -162,6 +163,7 @@ export default function App() {
             triageData={triageData}
             onStartSession={handleStartSessionPlan}
             onResetSession={handleResetSessionFlow}
+            onSessionExpired={handleFullReset}
           />
         );
 
@@ -171,6 +173,7 @@ export default function App() {
             token={token}
             sessionId={sessionId}
             onBack={() => setCurrentPage('roadmap')}
+            onSessionExpired={handleFullReset}
           />
         );
 
@@ -179,6 +182,7 @@ export default function App() {
           <AgentPanel
             token={token}
             sessionId={sessionId}
+            onSessionExpired={handleFullReset}
           />
         );
 

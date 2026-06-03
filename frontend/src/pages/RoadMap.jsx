@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-export default function RoadMap({ session_id, token, triageData, onStartSession, onResetSession }) {
+export default function RoadMap({ session_id, token, triageData, onStartSession, onResetSession, onSessionExpired }) {
   const [tasks, setTasks] = useState(triageData.tasks || []);
   const [estimatedTime, setEstimatedTime] = useState(triageData.tiempo_total_estimado_min || 0);
   const [warning, setWarning] = useState(triageData.advertencia || null);
@@ -46,6 +46,11 @@ export default function RoadMap({ session_id, token, triageData, onStartSession,
         },
         body: JSON.stringify({ new_index: newIndex }),
       });
+
+      if (response.status === 401) {
+        if (onSessionExpired) onSessionExpired();
+        throw new Error('Tu sesión ha expirado. Por favor, inicia una nueva sesión.');
+      }
 
       if (!response.ok) {
         throw new Error('Fallo al reordenar la tarea en la base de datos.');
