@@ -1,0 +1,11 @@
+.env
+*.env.local
+*.db
+audit.log
+logs/
+node_modules/
+__pycache__/
+.venv/
+data/
+dist/
+.DS_Store

@@ -1,0 +1,64 @@
+services:
+  backend:
+    build: ./backend
+    container_name: flowstep-backend
+    user: "1000:1000"
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - JWT_SECRET=${JWT_SECRET}
+      - MCP_ALLOW_LIST=${MCP_ALLOW_LIST:-}
+      - SESSION_TIMEOUT_MINUTES=${SESSION_TIMEOUT_MINUTES:-480}
+      - MAX_TASKS_PER_SESSION=${MAX_TASKS_PER_SESSION:-20}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - OPENCLAW_GATEWAY_URL=http://openclaw:18789
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-flowstep-secret-token-123}
+      - NOTION_API_TOKEN=${NOTION_API_TOKEN:-}
+      - NOTION_ROOT_PAGE_ID=${NOTION_ROOT_PAGE_ID:-}
+      - NOTION_TASKS_DB_ID=${NOTION_TASKS_DB_ID:-}
+      - NOTION_LOG_DB_ID=${NOTION_LOG_DB_ID:-}
+    volumes:
+      - ./data:/app/data
+    networks:
+      - flowstep-net
+    depends_on:
+      openclaw:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  openclaw:
+    build: ./openclaw
+    container_name: flowstep-openclaw
+    user: "1000:1000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - MCP_ALLOW_LIST=${MCP_ALLOW_LIST:-}
+      - OPENCLAW_GATEWAY_TOKEN=${OPENCLAW_GATEWAY_TOKEN:-flowstep-secret-token-123}
+    volumes:
+      - ./data:/app/data
+    networks:
+      - flowstep-net
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    container_name: flowstep-frontend
+    user: "1000:1000"
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks:
+      - flowstep-net
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  flowstep-net:
+    driver: bridge
