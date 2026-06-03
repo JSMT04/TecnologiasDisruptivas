@@ -138,46 +138,66 @@ export default function AgentPanel({ token, sessionId }) {
     }
   }, [token]);
 
-  /* ── Fetch activity log ── */
+  /* ── Fetch activity log + agent statuses ── */
   const fetchLog = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/v1/notion/agent-log?limit=20`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error('Error fetching log');
-      const data = await res.json();
-      const entries = Array.isArray(data) ? data : data.entries || [];
-      setLog(entries);
+      // Fetch log entries and agent status in parallel
+      const [logRes, statusRes] = await Promise.all([
+        fetch(`${API_BASE}/api/v1/notion/agent-log?limit=20`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+        fetch(`${API_BASE}/api/v1/notion/agents-status`, {
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      ]);
 
-      // Derive agent statuses from log
+      // Parse log entries
+      let entries = [];
+      if (logRes.ok) {
+        const logData = await logRes.json();
+        entries = Array.isArray(logData) ? logData : logData.logs || [];
+        setLog(entries);
+      }
+
+      // Parse real-time agent status from AgentManager
+      let liveAgents = {};
+      if (statusRes.ok) {
+        const statusData = await statusRes.json();
+        liveAgents = statusData.agents || {};
+      }
+
+      // Derive per-agent info by combining live status + log history
       const orgEntries = entries.filter(e => e.agent === 'Organizador');
       const ejEntries = entries.filter(e => e.agent === 'Ejecutor');
 
-      if (orgEntries.length > 0) {
-        const latest = orgEntries[0];
-        setAgents(prev => ({
-          ...prev,
-          organizador: {
-            status: latest.status === 'Error' ? 'Error' : latest.status === 'Pending' ? 'Working' : 'Idle',
-            lastAction: latest.description || latest.action,
-            lastActionTime: latest.timestamp,
-            totalActions: orgEntries.length,
-          },
-        }));
-      }
+      const mapStatus = (liveState) => {
+        if (!liveState) return 'Idle';
+        if (liveState === 'working') return 'Working';
+        if (liveState === 'error') return 'Error';
+        return 'Idle';
+      };
 
-      if (ejEntries.length > 0) {
-        const latest = ejEntries[0];
-        setAgents(prev => ({
-          ...prev,
-          ejecutor: {
-            status: latest.status === 'Error' ? 'Error' : latest.status === 'Pending' ? 'Working' : 'Idle',
-            lastAction: latest.description || latest.action,
-            lastActionTime: latest.timestamp,
-            totalActions: ejEntries.length,
-          },
-        }));
-      }
+      const liveOrg = liveAgents['Organizador'] || {};
+      const liveEj = liveAgents['Ejecutor'] || {};
+
+      setAgents({
+        organizador: {
+          status: orgEntries.length > 0 && orgEntries[0].status === 'Error'
+            ? 'Error'
+            : mapStatus(liveOrg.state),
+          lastAction: liveOrg.last_action || (orgEntries[0]?.description || orgEntries[0]?.action) || null,
+          lastActionTime: liveOrg.last_action_at || orgEntries[0]?.timestamp || null,
+          totalActions: orgEntries.length,
+        },
+        ejecutor: {
+          status: ejEntries.length > 0 && ejEntries[0].status === 'Error'
+            ? 'Error'
+            : mapStatus(liveEj.state),
+          lastAction: liveEj.last_action || (ejEntries[0]?.description || ejEntries[0]?.action) || null,
+          lastActionTime: liveEj.last_action_at || ejEntries[0]?.timestamp || null,
+          totalActions: ejEntries.length,
+        },
+      });
     } catch {
       // silently fail for log
     } finally {

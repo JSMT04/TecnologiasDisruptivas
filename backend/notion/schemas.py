@@ -38,6 +38,7 @@ class NotionTask(BaseModel):
     notes: str = ""
     created_time: Optional[str] = None
     last_edited_time: Optional[str] = None
+    verificado: bool = False
 
     class Config:
         from_attributes = True

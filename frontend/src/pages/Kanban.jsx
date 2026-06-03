@@ -44,12 +44,16 @@ function TaskCard({ task, onMove, onExecute, onComplete, onVerify, verificationR
 
   const colIdx = COLUMN_ORDER.indexOf(task.status);
   const canMoveLeft = colIdx > 0;
-  const canMoveRight = colIdx < COLUMN_ORDER.length - 1;
   const canExecute = task.status === 'To Do' || task.status === 'In Progress';
   
   // File verification requirement (Phase C)
   const hasExpectedPath = !!task.expected_path;
-  const isVerified = verificationResult?.verificado;
+  const isVerified = task.verificado || verificationResult?.verificado;
+  
+  // Block moving right to "Done" if task needs verification but isn't verified
+  const nextColIsDone = colIdx + 1 === COLUMN_ORDER.indexOf('Done');
+  const blockedByVerification = nextColIsDone && hasExpectedPath && !isVerified;
+  const canMoveRight = colIdx < COLUMN_ORDER.length - 1 && !blockedByVerification;
   
   // Disable Complete if expected_path is present but not verified
   const canComplete = (task.status === 'In Progress' || task.status === 'En Revisión') && (!hasExpectedPath || isVerified);
@@ -132,6 +136,15 @@ function TaskCard({ task, onMove, onExecute, onComplete, onVerify, verificationR
             →
           </button>
         )}
+        {blockedByVerification && (
+          <button
+            disabled
+            className="p-1.5 rounded-lg text-gray-600 cursor-not-allowed text-xs"
+            title="🔒 Verifica el archivo antes de mover a Done"
+          >
+            →🔒
+          </button>
+        )}
         <div className="flex-1" />
         {canExecute && (
           <button
@@ -207,12 +220,14 @@ export default function Kanban({ token, sessionId, onBack }) {
         ...prev,
         [pageId]: data
       }));
+      // Refresh task list so status & canComplete re-evaluate immediately
+      await fetchTasks(true);
     } catch (err) {
       setError(err.message);
     } finally {
       setActionLoading(null);
     }
-  }, [token]);
+  }, [token, fetchTasks]);
 
   /* ── Move task ── */
   const handleMove = useCallback(async (pageId, newStatus) => {

@@ -5,8 +5,10 @@ REST endpoints for Notion integration, task management, and agent orchestration.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -138,18 +140,28 @@ async def list_tasks(
             session_id=session_id, status=task_status
         )
         
-        # Merge expected_path from SQLite local DB
+        # Merge expected_path and verificado from SQLite local DB
         path_map = {}
+        verified_tasks = set()
         if session_id:
             local_tasks = db.scalars(
                 select(TaskModel).where(TaskModel.session_id == session_id)
             ).all()
             path_map = {t.id: t.expected_path for t in local_tasks if t.expected_path}
             
+            audits = db.scalars(
+                select(MCPAuditLog.task_id).where(
+                    MCPAuditLog.session_id == session_id,
+                    MCPAuditLog.result == "OK",
+                )
+            ).all()
+            verified_tasks = {a for a in audits if a}
+            
         tasks_data = []
         for t in tasks:
             td = t.model_dump()
             td["expected_path"] = path_map.get(t.page_id)
+            td["verificado"] = t.page_id in verified_tasks
             tasks_data.append(td)
             
         return {
@@ -237,9 +249,30 @@ async def complete_task(
     task_page_id: str,
     body: Optional[NotesBody] = None,
     manager: AgentManager = Depends(get_agent_manager),
+    db: Session = Depends(get_db),
     auth: dict = Depends(require_auth),
 ) -> dict:
     """Marcar una tarea como completada (Done)."""
+    # Guard: block completing if task has expected_path without verification
+    local_task = db.scalar(
+        select(TaskModel).where(TaskModel.id == task_page_id)
+    )
+    if local_task and local_task.expected_path:
+        # Check if a successful verification exists in audit log
+        audit = db.scalar(
+            select(MCPAuditLog).where(
+                MCPAuditLog.task_id == task_page_id,
+                MCPAuditLog.result == "OK",
+            )
+        )
+        if not audit:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "No se puede completar: la tarea requiere verificación "
+                    "de archivo local. Usa el botón 🔍 Verificar primero."
+                ),
+            )
     notes = body.notes if body else ""
     try:
         result = await manager.complete_task(task_page_id, notes)
@@ -293,9 +326,32 @@ async def move_task(
     task_page_id: str,
     body: MoveTaskRequest,
     notion: NotionClient = Depends(get_notion_client),
+    db: Session = Depends(get_db),
     auth: dict = Depends(require_auth),
 ) -> dict:
     """Mover una tarea a un nuevo estado (columna del Kanban)."""
+    # Guard: block moving to Done if task has expected_path without verification
+    if body.status == "Done":
+        local_task = db.scalar(
+            select(TaskModel).where(TaskModel.id == task_page_id)
+        )
+        if local_task and local_task.expected_path:
+            # Check if a successful verification exists in audit log
+            audit = db.scalar(
+                select(MCPAuditLog).where(
+                    MCPAuditLog.task_id == task_page_id,
+                    MCPAuditLog.result == "OK",
+                )
+            )
+            if not audit:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "No se puede mover a Done: la tarea requiere verificación "
+                        "de archivo local. Usa el botón 🔍 Verificar primero."
+                    ),
+                )
+
     try:
         updated = await notion.move_task_status(task_page_id, body.status)
         return {"task": updated.model_dump(), "status": body.status}
