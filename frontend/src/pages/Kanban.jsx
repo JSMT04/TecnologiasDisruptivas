@@ -37,7 +37,7 @@ const AGENT_DISPLAY = {
 };
 
 /* ── Task Card Component ── */
-function TaskCard({ task, onMove, onExecute, onComplete, index }) {
+function TaskCard({ task, onMove, onExecute, onComplete, onVerify, verificationResult, index }) {
   const priorityClass = PRIORITY_STYLES[task.priority] || PRIORITY_STYLES.Media;
   const typeEmoji = TYPE_EMOJI[task.type] || '📌';
   const agentLabel = AGENT_DISPLAY[task.agent] || `👤 ${task.agent || 'Sin asignar'}`;
@@ -46,7 +46,13 @@ function TaskCard({ task, onMove, onExecute, onComplete, index }) {
   const canMoveLeft = colIdx > 0;
   const canMoveRight = colIdx < COLUMN_ORDER.length - 1;
   const canExecute = task.status === 'To Do' || task.status === 'In Progress';
-  const canComplete = task.status === 'In Progress' || task.status === 'En Revisión';
+  
+  // File verification requirement (Phase C)
+  const hasExpectedPath = !!task.expected_path;
+  const isVerified = verificationResult?.verificado;
+  
+  // Disable Complete if expected_path is present but not verified
+  const canComplete = (task.status === 'In Progress' || task.status === 'En Revisión') && (!hasExpectedPath || isVerified);
 
   return (
     <div
@@ -78,6 +84,33 @@ function TaskCard({ task, onMove, onExecute, onComplete, index }) {
 
       {/* Agent */}
       <div className="text-[11px] text-gray-500 mb-3">{agentLabel}</div>
+
+      {/* File verification panel (Phase C) */}
+      {hasExpectedPath && (
+        <div className="mt-2 mb-3 p-2 bg-white/5 rounded-xl border border-white/5 space-y-1.5">
+          <div className="flex items-center justify-between gap-1 text-[11px] text-gray-400">
+            <span className="truncate flex-1" title={task.expected_path}>
+              📁 {task.expected_path}
+            </span>
+            <button
+              onClick={() => onVerify(task.page_id)}
+              className="px-1.5 py-0.5 rounded bg-primary/20 hover:bg-primary/30 text-primary text-[10px] font-semibold transition-all shrink-0"
+              title="Verificar archivo en sistema local"
+            >
+              🔍 Verificar
+            </button>
+          </div>
+          {verificationResult && (
+            <div className={`text-[10px] font-medium leading-relaxed p-1.5 rounded-lg ${
+              verificationResult.verificado
+                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/10'
+                : 'bg-red-500/10 text-red-400 border border-red-500/10'
+            }`}>
+              {verificationResult.verificado ? '✅' : '❌'} {verificationResult.detalle}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Action buttons */}
       <div className="flex items-center gap-1.5 pt-2 border-t border-white/5">
@@ -130,6 +163,7 @@ export default function Kanban({ token, sessionId, onBack }) {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [actionLoading, setActionLoading] = useState(null); // page_id of task being acted on
+  const [verificationResults, setVerificationResults] = useState({});
 
   /* ── Fetch tasks ── */
   const fetchTasks = useCallback(async (silent = false) => {
@@ -158,6 +192,27 @@ export default function Kanban({ token, sessionId, onBack }) {
     const interval = setInterval(() => fetchTasks(true), 15000);
     return () => clearInterval(interval);
   }, [fetchTasks]);
+
+  /* ── Verify task ── */
+  const handleVerify = useCallback(async (pageId) => {
+    setActionLoading(pageId);
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/notion/tasks/${pageId}/verify`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error('Error al verificar archivo');
+      const data = await res.json();
+      setVerificationResults(prev => ({
+        ...prev,
+        [pageId]: data
+      }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setActionLoading(null);
+    }
+  }, [token]);
 
   /* ── Move task ── */
   const handleMove = useCallback(async (pageId, newStatus) => {
@@ -344,6 +399,8 @@ export default function Kanban({ token, sessionId, onBack }) {
                     onMove={handleMove}
                     onExecute={handleExecute}
                     onComplete={handleComplete}
+                    onVerify={handleVerify}
+                    verificationResult={verificationResults[task.page_id]}
                   />
                 ))}
 
