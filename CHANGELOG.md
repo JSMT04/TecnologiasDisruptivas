@@ -49,3 +49,8 @@ En este sprint nos enfocamos en erradicar por completo la latencia de red percib
 
 ### 4. Corrección en Creación de Relaciones
 * **Setup Robusto:** Se actualizó `setup_databases.py` para pasar el ID de la base de datos de tareas creada a la función de creación de logs de agentes. Esto permite que las nuevas creaciones de base de datos establezcan la relación `"Task"` de manera correcta y nativa en Notion.
+
+### 5. Soporte para Auditoría de Archivos en el Escritorio (D:)
+* **Montaje del Volumen:** Se agregó un nuevo mapeo de volumen en `docker-compose.yml` (`${HOST_DESKTOP_PATH:-D:/Desktop}:/app/desktop`) para enlazar el escritorio físico del host (en el disco `D:`) al contenedor de backend en la ruta `/app/desktop`.
+* **Políticas de Acceso (Sandbox):** Se configuraron y expusieron las variables `HOST_DESKTOP_PATH=D:\Desktop` y `MCP_ALLOW_LIST=/app,/app/desktop` en el archivo `.env` para otorgar los permisos de lectura, verificación y análisis sintáctico a cualquier archivo ubicado en el Escritorio, de forma totalmente transparente e inmune a restricciones de sandboxing.
+
