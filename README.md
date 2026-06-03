@@ -50,20 +50,20 @@ flowstep-ai/
 
 ```mermaid
 graph TD
-    subgraph Cliente (Navegador)
+    subgraph Cliente_Navegador ["Cliente (Navegador)"]
         FE[React Frontend :3000]
     end
 
-    subgraph Docker Network
+    subgraph Docker_Network ["Docker Network"]
         BE[FastAPI Backend :8000]
         OC[OpenClaw LLM Gateway :18789]
     end
 
-    subgraph Base de Datos Local
+    subgraph Base_Datos_Local ["Base de Datos Local"]
         DB[(SQLite Local)]
     end
 
-    subgraph Nube (Notion Workspace)
+    subgraph Nube_Notion_Workspace ["Nube (Notion Workspace)"]
         N_API[api.notion.com]
         KB[📋 Tablero Kanban DB]
         LOG[📊 Agent Activity Log DB]
