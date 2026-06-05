@@ -25,7 +25,7 @@ from notion.schemas import UpdateTaskRequest
 logger = logging.getLogger("flowstep.agents.auto_verifier")
 
 AUTO_VERIFY_INTERVAL_SECONDS = 5
-BASE_DIR = "/app"
+SEARCH_BASES = ["/app", "/app/project", "/app/data", "/app/desktop"]
 
 
 def _get_unverified_in_progress_tasks(db: Session) -> list[TaskModel]:
@@ -58,9 +58,20 @@ def _get_unverified_in_progress_tasks(db: Session) -> list[TaskModel]:
 def _verify_file(expected_path: str) -> dict:
     """Perform file verification: existence, non-empty, syntax.
 
-    Returns dict with keys: verificado (bool), detalle (str).
+    Searches across multiple base directories to find the file.
+    Returns dict with keys: verificado (bool), detalle (str), result_code (str).
     """
-    resolved_path = os.path.abspath(os.path.join(BASE_DIR, expected_path))
+    # Try to find the file in any of the search bases
+    resolved_path = None
+    for base in SEARCH_BASES:
+        candidate = os.path.abspath(os.path.join(base, expected_path))
+        if os.path.exists(candidate):
+            resolved_path = candidate
+            break
+
+    # If not found in any base, use the first base for error reporting
+    if resolved_path is None:
+        resolved_path = os.path.abspath(os.path.join(SEARCH_BASES[0], expected_path))
 
     # Check path allowance
     allow_list = os.getenv("MCP_ALLOW_LIST", "").strip()
@@ -160,9 +171,17 @@ async def _run_auto_verify_cycle(notion_client: NotionClient) -> None:
                 continue
 
             result = _verify_file(expected_path)
-            resolved_path = os.path.abspath(
-                os.path.join(BASE_DIR, expected_path)
-            )
+            # Resolve path for audit logging (same multi-base logic)
+            resolved_path = None
+            for base in SEARCH_BASES:
+                candidate = os.path.abspath(os.path.join(base, expected_path))
+                if os.path.exists(candidate):
+                    resolved_path = candidate
+                    break
+            if resolved_path is None:
+                resolved_path = os.path.abspath(
+                    os.path.join(SEARCH_BASES[0], expected_path)
+                )
 
             # Write audit log entry
             audit = MCPAuditLog(

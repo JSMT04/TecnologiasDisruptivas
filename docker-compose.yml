@@ -21,6 +21,7 @@ services:
       - NOTION_TASKS_DB_ID=${NOTION_TASKS_DB_ID:-}
       - NOTION_LOG_DB_ID=${NOTION_LOG_DB_ID:-}
     volumes:
+      - .:/app/project:ro
       - ./data:/app/data
       - ${HOST_DESKTOP_PATH:-D:/Desktop}:/app/desktop
     networks:

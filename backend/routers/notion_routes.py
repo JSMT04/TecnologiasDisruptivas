@@ -427,9 +427,16 @@ async def verify_task_file(
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         }
 
-    # Resolve path inside the container workspace (/app)
-    base_dir = "/app"
-    resolved_path = os.path.abspath(os.path.join(base_dir, expected_path))
+    # Resolve path inside the container workspace — search multiple bases
+    search_bases = ["/app", "/app/project", "/app/data", "/app/desktop"]
+    resolved_path = None
+    for base in search_bases:
+        candidate = os.path.abspath(os.path.join(base, expected_path))
+        if os.path.exists(candidate):
+            resolved_path = candidate
+            break
+    if resolved_path is None:
+        resolved_path = os.path.abspath(os.path.join(search_bases[0], expected_path))
 
     # Audit log entry helper
     def log_audit(operation: str, result: str, detail: str = ""):
@@ -453,7 +460,7 @@ async def verify_task_file(
     allow_list = os.getenv("MCP_ALLOW_LIST", "").strip()
     allowed = False
     if not allow_list:
-        allowed = resolved_path.startswith(os.path.abspath(base_dir))
+        allowed = resolved_path.startswith(os.path.abspath(search_bases[0]))
     else:
         allowed_dirs = [os.path.abspath(d.strip()) for d in allow_list.split(",") if d.strip()]
         for d in allowed_dirs:

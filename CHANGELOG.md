@@ -73,3 +73,37 @@ En este sprint se introdujo automatización activa continua para auditar el sist
 
 ### 4. Soporte para el Escritorio Real de Windows
 * **Corrección de Ruta de Montaje:** Se actualizó la variable de entorno `HOST_DESKTOP_PATH` en el `.env` para apuntar a la ubicación real del escritorio de usuario en Windows (`D:\Usuarios\Juan Martelo\Desktop`), permitiendo que el volumen de Docker monte directamente la carpeta activa de trabajo del usuario en lugar de un directorio fantasma.
+
+---
+
+## 🔧 Sprint 7 — Correcciones Críticas, Triage con IA Real y Cobertura Total del Proyecto
+
+En este sprint se resolvieron tres bugs críticos que impedían la operación autónoma completa del sistema, y se expandió el alcance de la auditoría de archivos a todo el proyecto.
+
+### 1. Corrección del Agente Organizador (Triage con IA Real en lugar de Mock)
+* **Causa Raíz:** OpenClaw en versiones recientes tiene un modelo global predeterminado (`openai/gpt-5.5`) que se activa automáticamente cuando el cliente envía `"model": "default"` en la petición. Como el proyecto no dispone de API Key de OpenAI, la llamada fallaba silenciosamente y el sistema siempre caía al modo simulado (mock), mostrando el aviso *"Respuesta simulada por fallo del Gateway AI"*.
+* **Solución — Estrategia de 3 Capas de Resiliencia:** Se refactorizó el método `run_triage()` en [openclaw_client.py](file:///c:/Users/Usuario/FlowStep%20AI/flowstep-ai/backend/agent/openclaw_client.py) para implementar un sistema de fallback ordenado:
+  1. **Estrategia 1 (Prioritaria):** Llamada directa a la REST API de Google Gemini (`generativelanguage.googleapis.com`) usando la `GEMINI_API_KEY` configurada en el entorno. Elimina cualquier dependencia de OpenClaw para el triage.
+  2. **Estrategia 2 (Fallback):** Si la llamada directa a Gemini falla, intenta OpenClaw Gateway especificando explícitamente `"model": "google/gemini-2.5-flash"` en lugar de `"default"`.
+  3. **Estrategia 3 (Último recurso):** Si ambas estrategias anteriores fallan, activa el mock inteligente para garantizar una UX robusta en todo momento.
+
+### 2. Cobertura Total del Proyecto — Montaje de Volumen Completo
+* **Problema:** Solo las carpetas `./data` y el Escritorio estaban montadas como volúmenes en vivo. Cualquier archivo creado en `docs/`, `frontend/`, `backend/` u otras carpetas del proyecto era invisible para el contenedor porque Docker solo tenía copias estáticas del momento del build.
+* **Solución — Volumen de Solo Lectura del Proyecto:** Se añadió el montaje `.:/app/project:ro` en [docker-compose.yml](file:///c:/Users/Usuario/FlowStep%20AI/flowstep-ai/docker-compose.yml). Esto expone **todo el proyecto FlowStep AI en tiempo real** dentro del contenedor en la ruta `/app/project`, sin riesgo de escrituras accidentales (flag `:ro` = read-only).
+* **Actualización del Allow-List:** Se añadió `/app/project` a `MCP_ALLOW_LIST` en el `.env` para que el sandbox de seguridad permita la auditoría de archivos en cualquier carpeta del proyecto.
+
+### 3. Búsqueda Multi-Base en el Auto-Verificador
+* **Mejora Arquitectónica:** Se reemplazó la constante única `BASE_DIR = "/app"` por una lista `SEARCH_BASES` en [auto_verifier.py](file:///c:/Users/Usuario/FlowStep%20AI/flowstep-ai/backend/agents/auto_verifier.py) y en el endpoint manual de verificación en [notion_routes.py](file:///c:/Users/Usuario/FlowStep%20AI/flowstep-ai/backend/routers/notion_routes.py). El verificador ahora busca el archivo en cuatro ubicaciones de forma secuencial e inteligente:
+  | Base | Contenido |
+  |:---|:---|
+  | `/app` | Código del backend (build-time) |
+  | `/app/project` | Todo el proyecto en vivo (docs/, frontend/, etc.) |
+  | `/app/data` | Carpeta de datos persistente |
+  | `/app/desktop` | Escritorio físico de Windows |
+
+### 4. Corrección del Bug `BASE_DIR` (NameError silencioso)
+* **Causa Raíz:** Al renombrar `BASE_DIR` a `SEARCH_BASES` para implementar la búsqueda multi-base, quedó una referencia huérfana a `BASE_DIR` en la línea 175 de la función `_run_auto_verify_cycle()` en `auto_verifier.py`. Esto lanzaba un `NameError` que era capturado silenciosamente por el bloque `except` general, haciendo que **el ciclo de auto-completado completo fallara** sin mover las tareas a Done.
+* **Solución:** Se corrigió la referencia para usar la misma lógica de búsqueda multi-base (`SEARCH_BASES`), restaurando el auto-completado automático de tareas verificadas.
+
+### 5. Soporte para Archivos Markdown (`.md`) y Cualquier Extensión
+* **Clarificación:** Los archivos `.md`, `.txt`, `.json` y cualquier otra extensión no especial son soportados por el auto-verificador. La auditoría valida que el archivo **exista** y **no esté vacío** (≥ 1 byte). Solo `.py` y `.json` tienen validación sintáctica adicional. El error previo con `docs/Freelance.md` era exclusivamente por el problema de volumen descrito en el punto #2.

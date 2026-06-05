@@ -54,11 +54,17 @@ class OpenClawClient:
     async def run_triage(
         self, tasks: list[str], context: dict | None = None
     ) -> dict:
-        """Send tasks to OpenClaw for triage analysis."""
+        """Send tasks to Gemini for triage analysis.
+
+        Strategy:
+        1. Try direct Google Gemini REST API call (most reliable).
+        2. Fallback to OpenClaw Gateway if direct call fails.
+        3. Fallback to intelligent mock if everything fails.
+        """
         if self.is_mock_mode:
             return self._generate_mock_triage(tasks)
 
-        # Build prompt payload for OpenClaw Gateway v1 chat completions
+        # Build the prompt content (shared by both strategies)
         system_prompt = (
             "Eres FlowStep AI. Analiza la lista de tareas del usuario y responde únicamente con un "
             "JSON que cumpla estrictamente el esquema dado. No incluyas comentarios ni marcas markdown adicionales."
@@ -87,13 +93,75 @@ class OpenClawClient:
             "}"
         )
 
+        # --- Strategy 1: Direct Google Gemini REST API ---
+        gemini_key = os.getenv("GEMINI_API_KEY", "")
+        if gemini_key and "PENDIENTE" not in gemini_key:
+            result = await self._call_gemini_direct(gemini_key, system_prompt, user_content)
+            if result is not None:
+                return result
+            logger.warning("Direct Gemini API call failed, falling back to OpenClaw Gateway.")
+
+        # --- Strategy 2: OpenClaw Gateway ---
+        result = await self._call_openclaw_gateway(system_prompt, user_content)
+        if result is not None:
+            return result
+
+        # --- Strategy 3: Mock fallback ---
+        logger.warning("All AI strategies failed, using mock triage.")
+        return self._generate_mock_triage(tasks, warning="Nota: Respuesta simulada por fallo del Gateway AI.")
+
+    async def _call_gemini_direct(
+        self, api_key: str, system_prompt: str, user_content: str
+    ) -> dict | None:
+        """Call the Google Gemini REST API directly (no OpenClaw middleman)."""
+        import json
+
+        gemini_url = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"gemini-2.5-flash:generateContent?key={api_key}"
+        )
         payload = {
-            "model": "default",
+            "system_instruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"parts": [{"text": user_content}]}],
+            "generationConfig": {"temperature": 0.1},
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(gemini_url, json=payload)
+                if response.status_code != 200:
+                    logger.error(
+                        "Gemini API returned error %s: %s",
+                        response.status_code,
+                        response.text[:300],
+                    )
+                    return None
+
+                data = response.json()
+                content = data["candidates"][0]["content"]["parts"][0]["text"]
+                # Clean up potential markdown wrappers
+                content_clean = content.strip()
+                if content_clean.startswith("```"):
+                    content_clean = content_clean.lstrip("`jsonJSONn \n")
+                    content_clean = content_clean.rstrip("`\n ")
+                return json.loads(content_clean)
+        except Exception as exc:
+            logger.error("Exception during direct Gemini API call: %s", exc)
+            return None
+
+    async def _call_openclaw_gateway(
+        self, system_prompt: str, user_content: str
+    ) -> dict | None:
+        """Call OpenClaw Gateway as a fallback strategy."""
+        import json
+
+        payload = {
+            "model": "google/gemini-2.5-flash",
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
+                {"role": "user", "content": user_content},
             ],
-            "temperature": 0.1
+            "temperature": 0.1,
         }
 
         headers = {"Content-Type": "application/json"}
@@ -105,23 +173,23 @@ class OpenClawClient:
                 response = await client.post(
                     f"{self.gateway_url}/v1/chat/completions",
                     json=payload,
-                    headers=headers
+                    headers=headers,
                 )
                 if response.status_code != 200:
-                    logger.error(f"OpenClaw returned error status: {response.status_code} - {response.text}")
-                    # Fallback to mock if API returns error so user has robust UX
-                    return self._generate_mock_triage(tasks, warning="Nota: Respuesta simulada por fallo del Gateway AI.")
+                    logger.error(
+                        "OpenClaw returned error status: %s - %s",
+                        response.status_code,
+                        response.text[:300],
+                    )
+                    return None
 
                 data = response.json()
                 content = data["choices"][0]["message"]["content"]
-                # Parse content as JSON
-                import json
-                # Clean up potential markdown wrappers
                 content_clean = content.strip().lstrip("```json").rstrip("```").strip()
                 return json.loads(content_clean)
         except Exception as exc:
-            logger.error(f"Exception during OpenClaw API call: {exc}")
-            return self._generate_mock_triage(tasks, warning="Nota: Respuesta simulada por desconexión del Gateway AI.")
+            logger.error("Exception during OpenClaw API call: %s", exc)
+            return None
 
     def _generate_mock_triage(self, tasks: list[str], warning: str | None = None) -> dict:
         """Intelligently mock the LLM triage based on text analysis."""
