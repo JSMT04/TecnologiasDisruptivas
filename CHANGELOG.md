@@ -54,3 +54,22 @@ En este sprint nos enfocamos en erradicar por completo la latencia de red percib
 * **Montaje del Volumen:** Se agregó un nuevo mapeo de volumen en `docker-compose.yml` (`${HOST_DESKTOP_PATH:-D:/Desktop}:/app/desktop`) para enlazar el escritorio físico del host (en el disco `D:`) al contenedor de backend en la ruta `/app/desktop`.
 * **Políticas de Acceso (Sandbox):** Se configuraron y expusieron las variables `HOST_DESKTOP_PATH=D:\Desktop` y `MCP_ALLOW_LIST=/app,/app/desktop` en el archivo `.env` para otorgar los permisos de lectura, verificación y análisis sintáctico a cualquier archivo ubicado en el Escritorio, de forma totalmente transparente e inmune a restricciones de sandboxing.
 
+---
+
+## 🤖 Sprint 6 — Agente Auto-Verificador en Segundo Plano y Auto-Completado de Tareas
+
+En este sprint se introdujo automatización activa continua para auditar el sistema de archivos del usuario sin necesidad de intervención manual o clics en la interfaz.
+
+### 1. Loop de Auto-Verificación en Segundo Plano (Background Agent)
+* **Monitoreo Asíncrono:** Se diseñó e implementó un servicio en segundo plano ([auto_verifier.py](file:///c:/Users/Usuario/FlowStep%20AI/flowstep-ai/backend/agents/auto_verifier.py)) que corre indefinidamente como una tarea `asyncio` cada 5 segundos a nivel de la aplicación FastAPI.
+* **Escaneo de Tareas en Progreso:** El agente consulta la base de datos local (SQLite) buscando tareas que tengan especificada una ruta esperada (`expected_path`) pero que no hayan sido verificadas con éxito en el log de auditoría.
+* **Auditoría Silenciosa:** De manera autónoma, el agente audita la existencia, tamaño y sintaxis del archivo objetivo local (incluyendo soporte para el Escritorio de Windows montado en `/app/desktop`).
+
+### 2. Auto-Completado Automático (Auto-Move to Done)
+* **Sincronización Inteligente:** Al momento en que el agente auto-verificador detecta que el archivo local existe y es válido, escribe de forma asíncrona la auditoría `OK`, añade una nota en la tarea de Notion informando la verificación exitosa, y **mueve automáticamente el estado de la tarea a "Done"** en Notion.
+
+### 3. Ajuste de Sincronización del Frontend (Snappy Sync)
+* **Intervalo de Refresco Reducido:** Se ajustó el temporizador del tablero Kanban en React (`Kanban.jsx`) de 15 segundos a **5 segundos** para que los movimientos automatizados realizados por el agente auto-verificador en Notion se sincronicen casi de inmediato en la pantalla del usuario.
+
+### 4. Soporte para el Escritorio Real de Windows
+* **Corrección de Ruta de Montaje:** Se actualizó la variable de entorno `HOST_DESKTOP_PATH` en el `.env` para apuntar a la ubicación real del escritorio de usuario en Windows (`D:\Usuarios\Juan Martelo\Desktop`), permitiendo que el volumen de Docker monte directamente la carpeta activa de trabajo del usuario en lugar de un directorio fantasma.
