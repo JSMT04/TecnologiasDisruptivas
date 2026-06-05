@@ -178,11 +178,11 @@ async def _run_auto_verify_cycle(notion_client: NotionClient) -> None:
 
             if result["verificado"]:
                 logger.info(
-                    "Auto-verificación exitosa para tarea '%s' (%s)",
+                    "✅ Auto-verificación exitosa para tarea '%s' (%s) — moviendo a Done",
                     task.title,
                     expected_path,
                 )
-                # Update Notion notes in the background
+                # Update Notion notes and move to Done
                 try:
                     time_str = datetime.now(tz=timezone.utc).strftime(
                         "%Y-%m-%d %H:%M:%S"
@@ -191,7 +191,8 @@ async def _run_auto_verify_cycle(notion_client: NotionClient) -> None:
                     verification_label = (
                         f"\n\n[MCP Auto-Verify] Verificación automática exitosa ({time_str})\n"
                         f"- Archivo: {expected_path}\n"
-                        f"- Detalle: {result['detalle']}"
+                        f"- Detalle: {result['detalle']}\n"
+                        f"- Acción: Tarea completada automáticamente ✅"
                     )
                     updated_notes = (
                         f"{existing_notes}{verification_label}"
@@ -205,6 +206,20 @@ async def _run_auto_verify_cycle(notion_client: NotionClient) -> None:
                 except Exception as e:
                     logger.error(
                         "Error al actualizar notas de Notion (auto-verify): %s",
+                        e,
+                    )
+
+                # Auto-complete: move task to Done in Notion
+                try:
+                    await notion_client.move_task_status(task.id, "Done")
+                    logger.info(
+                        "✅ Tarea '%s' movida a Done automáticamente",
+                        task.title,
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Error al mover tarea '%s' a Done (auto-verify): %s",
+                        task.title,
                         e,
                     )
 
