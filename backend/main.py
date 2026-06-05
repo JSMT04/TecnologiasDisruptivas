@@ -15,7 +15,10 @@ from fastapi.middleware.cors import CORSMiddleware
 # Load environment variables from .env (before any config reads)
 load_dotenv()
 
+import asyncio
+
 from agent.openclaw_client import OpenClawClient  # noqa: E402 — must come after load_dotenv
+from agents.auto_verifier import start_auto_verifier  # noqa: E402
 from agents.manager import AgentManager  # noqa: E402
 from models.database import init_db  # noqa: E402
 from notion.client import NotionClient  # noqa: E402
@@ -48,8 +51,17 @@ async def lifespan(app: FastAPI):
     agent_manager = AgentManager(notion_client, openclaw_client)
     app.state.agent_manager = agent_manager
 
+    # Start auto-verifier background loop
+    auto_verify_task = asyncio.create_task(start_auto_verifier(notion_client))
+
     yield
-    # Shutdown (nothing to tear down yet)
+
+    # Shutdown — cancel the background auto-verifier
+    auto_verify_task.cancel()
+    try:
+        await auto_verify_task
+    except asyncio.CancelledError:
+        pass
 
 
 # ---------------------------------------------------------------------------

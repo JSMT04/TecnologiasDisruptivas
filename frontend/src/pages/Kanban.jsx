@@ -207,7 +207,7 @@ export default function Kanban({ token, sessionId, onBack, onSessionExpired }) {
   /* ── Mount + auto-refresh ── */
   useEffect(() => {
     fetchTasks();
-    const interval = setInterval(() => fetchTasks(true), 15000);
+    const interval = setInterval(() => fetchTasks(true), 5000);
     return () => clearInterval(interval);
   }, [fetchTasks]);
 
